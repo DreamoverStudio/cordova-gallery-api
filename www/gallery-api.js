@@ -55,4 +55,14 @@ GalleryAPI.prototype.getHQImageData = function(media, successCallback, errorCall
     );
 };
 
+GalleryAPI.prototype.controlVideoPlayer = function(media, successCallback, errorCallback) {
+  cordova.exec(
+      successCallback,
+      errorCallback,
+      'GalleryAPI',
+      'controlVideoPlayer',
+      [media]
+  );
+};
+
 module.exports = new GalleryAPI();
