@@ -24,6 +24,34 @@
 @implementation GalleryAPI
 
 - (void) checkPermission:(CDVInvokedUrlCommand*)command {
+    dispatch_async(dispatch_get_main_queue(), ^(void){
+        if(!self.avPlayerCtrl){
+            CGFloat topPadding = 0.0;
+            if (@available(iOS 11.0, *)) {
+                UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
+                topPadding = window.safeAreaInsets.top;
+            }
+            topPadding = topPadding + 45;
+            CGFloat viewWidth = [[UIScreen mainScreen]bounds].size.width / 4 * 3;
+            CGFloat viewHeight = viewWidth * 9 / 16 + 30;
+            __weak GalleryAPI* weakSelf = self;
+            [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
+            UIView *floatingView = [[UIView alloc] initWithFrame:CGRectMake(0,topPadding,viewWidth,viewHeight)];
+    //                        self.avPlayerLayer = [AVPlayerLayer playerLayerWithPlayer:self.avPlayer];
+    //                        self.avPlayerLayer.backgroundColor = [UIColor blackColor].CGColor;
+    //                        self.avPlayerLayer.frame = extraView.bounds;
+    //                        [extraView.layer addSublayer:self.avPlayerLayer];
+            self.avPlayerCtrl = [[AVPlayerViewController alloc] init];
+            self.avPlayerCtrl.view.frame = floatingView.frame;
+            self.avPlayerCtrl.view.hidden = YES;
+            self.avPlayerCtrl.delegate = weakSelf;
+            self.avPlayerCtrl.showsPlaybackControls = TRUE;
+    //                        [extraView addSubview:avPlayerCtrl.view];
+            [self.viewController addChildViewController:self.avPlayerCtrl];
+            [self.viewController.view addSubview:self.avPlayerCtrl.view];
+            
+        }
+    });
     
     [self.commandDelegate runInBackground:^{
         __block NSDictionary *result;
@@ -266,33 +294,6 @@
                                                               options:options
                                                         resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
                                                             if (result) {
-//                                                                if ([media[@"fileType"] isEqualToString:@"video"]){
-//                                                                    [self.concurrentQueue addOperationWithBlock:^{
-//                                                                        NSError* err = nil;
-//                                                                        if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
-//                                                                            options:NSAtomicWrite
-//                                                                             error:&err])
-//                                                                            media[@"error"] = @"false";
-//                                                                        else {
-//                                                                            if (err) {
-//                                                                                media[@"thumbnail"] = @"";
-//                                                                                NSLog(@"Error saving image: %@", [err localizedDescription]);
-//                                                                            }
-//                                                                        }
-//                                                                    }];
-//                                                                } else {
-//                                                                    NSError* err = nil;
-//                                                                    if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
-//                                                                        options:NSAtomicWrite
-//                                                                         error:&err])
-//                                                                        media[@"error"] = @"false";
-//                                                                    else {
-//                                                                        if (err) {
-//                                                                            media[@"thumbnail"] = @"";
-//                                                                            NSLog(@"Error saving image: %@", [err localizedDescription]);
-//                                                                        }
-//                                                                    }
-//                                                                }
                                                                 NSError* err = nil;
                                                                 if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
                                                                     options:NSAtomicWrite
