@@ -169,7 +169,6 @@
         self.videoUrlCount = 0;
         
         if (collections && collections.count > 0) {
-            NSLog(@"get media at collection %@", collections[0]);
             PHAssetCollection* collection = collections[0];
             [[PHAsset fetchAssetsInAssetCollection:collection
                                            options:nil] enumerateObjectsUsingBlock:^(PHAsset* obj, NSUInteger idx, BOOL* stop) {
@@ -230,18 +229,27 @@
                 }
             }];
         }
+        
         NSArray* reversedAssests = [[assets reverseObjectEnumerator] allObjects];
-        for (NSMutableDictionary *reversedAsset in reversedAssests){
-//            [self getMediaThumbnailInternal: reversedAsset];
-            [self.concurrentThumbnailQueue addOperationWithBlock:^(void){
-                [self getMediaThumbnailInternal: reversedAsset];
-            }];
+        
+        if ([album[@"method"] isEqualToString:@"generateThumbnails"]){
+            for (int i=0; i < reversedAssests.count; i++){
+                NSMutableDictionary *reversedAsset = [reversedAssests objectAtIndex:i];
+                [self.concurrentThumbnailQueue addOperationWithBlock:^{
+                    [self getMediaThumbnailInternal: reversedAsset atIndex:i withTotal:reversedAssests.count withCallbackId:command.callbackId];
+                }];
+                
+//                if(i == reversedAssests.count - 1){
+//                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString: @"done"];
+//                    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+//                }
+            }
+        } else {
+            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:reversedAssests];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         }
         
-
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:reversedAssests];
-
-        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        
     }];
 }
 
@@ -311,11 +319,11 @@
                                                                             }
                                                                         }
                                                                     }];
-//                                                                    if([media[@"fileType"] isEqualToString:@"video"]){
-//                                                                        [self.concurrentVideoQueue addOperationWithBlock:^(void){
-//                                                                            [self processVideo:assets[0] withMedia:media withFileMgr:fileMgr withCallBackId:command.callbackId];
-//                                                                        }];
-//                                                                    }
+                                                                    if([media[@"fileType"] isEqualToString:@"video"]){
+                                                                        [self.concurrentVideoQueue addOperationWithBlock:^(void){
+                                                                            [self processVideo:assets[0] withMedia:media withFileMgr:fileMgr withCallBackId:command.callbackId];
+                                                                        }];
+                                                                    }
                                                                 }
                                                             }];
                 
@@ -371,103 +379,131 @@
     }];
 }
 
-- (void)getMediaThumbnailInternal: (NSMutableDictionary *)media
+- (bool)getMediaThumbnailInternal: (NSMutableDictionary *)media atIndex:(int) index withTotal:(long)total withCallbackId:(NSString *)callbackId
 {
     [self initConcurrent];
-    [self.commandDelegate runInBackground:^{
-        PHImageRequestOptions* options = [PHImageRequestOptions new];
-        options.synchronous = YES;
-        options.resizeMode = PHImageRequestOptionsResizeModeFast;
-        options.networkAccessAllowed = false;
-        
+    PHImageRequestOptions* options = [PHImageRequestOptions new];
+    options.synchronous = YES;
+    options.resizeMode = PHImageRequestOptionsResizeModeFast;
+    options.networkAccessAllowed = false;
+    
 //        NSMutableDictionary* media = [command argumentAtIndex:0];
-        NSString* imageId = [media[@"id"] stringByReplacingOccurrencesOfString:@"/" withString:@"^"];
+    NSString* imageId = [media[@"id"] stringByReplacingOccurrencesOfString:@"/" withString:@"^"];
 //        NSString* docsPath = [NSTemporaryDirectory() stringByStandardizingPath];
-        NSArray * paths2 = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
-        NSString * docsPath = [paths2 lastObject];
-        NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, imageId];
+    NSArray * paths2 = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+    NSString * docsPath = [paths2 lastObject];
+    NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, imageId];
 
-        NSFileManager* fileMgr = [[NSFileManager alloc] init];
-        NSString *systemVersion = [[UIDevice currentDevice] systemVersion];
-        CGFloat screenWidth = [[UIScreen mainScreen]bounds].size.width;
-        CGFloat scale = 2;
-        if (screenWidth > 700) {
-            scale = 1.5;
+    NSFileManager* fileMgr = [[NSFileManager alloc] init];
+//        NSString *systemVersion = [[UIDevice currentDevice] systemVersion];
+    CGFloat screenWidth = [[UIScreen mainScreen]bounds].size.width;
+    CGFloat scale = 2;
+    if (screenWidth > 700) {
+        scale = 1.5;
+    }
+    CGSize imageSize = CGSizeMake(screenWidth/3*scale, screenWidth/3*scale);
+//        CGSize imageSize = CGSizeMake(systemVersion.floatValue < 12.0 ? 50: screenWidth/3*scale, systemVersion.floatValue < 12.0 ? 50: screenWidth/3*scale);
+
+    if ([fileMgr fileExistsAtPath:thumbnailPath]){
+        NSLog(@"File exists");
+    } else {
+        NSLog(@"File not exists");
+        media[@"error"] = @"true";
+        PHFetchResult* assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[ media[@"id"] ] options:nil];
+        
+        if (assets && assets.count > 0) {
+//                [self.concurrentThumbnailQueue addOperationWithBlock:^(void){//  Set up a semaphore for the completion handler and progress timer
+//                dispatch_semaphore_t sessionWaitSemaphore = dispatch_semaphore_create(0);
+//                __block bool flag = YES;
+                
+                void (^completionHandler)(UIImage* _Nullable result, NSDictionary* _Nullable info) = ^(UIImage* _Nullable result, NSDictionary* _Nullable info)
+                {
+                    if (result) {
+                        NSError *err = nil;
+                        if ([UIImageJPEGRepresentation(result, .6) writeToFile:thumbnailPath
+                            options:NSAtomicWrite
+                             error:&err])
+                            media[@"error"] = @"false";
+                        else {
+                            if (err) {
+                                media[@"thumbnail"] = @"";
+                                NSLog(@"Error saving image: %@", [err localizedDescription]);
+                            }
+                        }
+                        NSLog(@"generating index %d", index);
+//                        flag = NO;
+//                        dispatch_semaphore_signal(sessionWaitSemaphore);
+//                        if((index + 1) % 8 == 0){
+//                            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString: @"done"];
+//                            [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
+//                        }
+                        if(index < 10){
+                            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString: @"done"];
+                            [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
+                        }
+                        
+                    }
+                };
+                [[PHImageManager defaultManager] requestImageForAsset:assets[0]
+                                                           targetSize:imageSize
+                                                          contentMode:PHImageContentModeAspectFit
+                                                              options:options
+                                                        resultHandler:completionHandler];
+//                do {
+//                    dispatch_time_t dispatchTime = DISPATCH_TIME_FOREVER;  // if we dont want progress, we will wait until it finishes.
+//                    dispatchTime = getDispatchTimeFromSeconds((float)1.0);
+//                    dispatch_semaphore_wait(sessionWaitSemaphore, dispatchTime);
+//                } while( flag );
+//                }];
+            return YES;
+            
+                
         }
-        CGSize imageSize = CGSizeMake(systemVersion.floatValue < 12.0 ? 50: 300, systemVersion.floatValue < 12.0 ? 50: 300);
-
-        if ([fileMgr fileExistsAtPath:thumbnailPath]){
-            
-        } else {
-            media[@"error"] = @"true";
-            PHFetchResult* assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[ media[@"id"] ] options:nil];
-            
-            if (assets && assets.count > 0) {
-                    [[PHImageManager defaultManager] requestImageForAsset:assets[0]
-                                                               targetSize:imageSize
-                                                              contentMode:PHImageContentModeAspectFit
-                                                                  options:options
-                                                            resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
-                                                                if (result) {
-                                                                    NSError *err = nil;
-                                                                    if ([UIImageJPEGRepresentation(result, .6) writeToFile:thumbnailPath
-                                                                        options:NSAtomicWrite
-                                                                         error:&err])
-                                                                        media[@"error"] = @"false";
-                                                                    else {
-                                                                        if (err) {
-                                                                            media[@"thumbnail"] = @"";
-                                                                            NSLog(@"Error saving image: %@", [err localizedDescription]);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }];
-            }
-            else {
-                if ([media[@"type"] isEqualToString:@"PHAssetCollectionSubtypeAlbumMyPhotoStream"]) {
-                    
-                    [[PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum
-                                                              subtype:PHAssetCollectionSubtypeAlbumMyPhotoStream
-                                                              options:nil] enumerateObjectsUsingBlock:^(PHAssetCollection* collection, NSUInteger idx, BOOL* stop) {
-                        if (collection != nil && collection.localizedTitle != nil && collection.localIdentifier != nil) {
-                            [[PHAsset fetchAssetsInAssetCollection:collection
-                                                           options:nil] enumerateObjectsUsingBlock:^(PHAsset* _Nonnull obj, NSUInteger idx, BOOL* _Nonnull stop) {
-                                if ([obj.localIdentifier isEqualToString:media[@"id"]]) {
-                                    [[PHImageManager defaultManager] requestImageForAsset:obj
-                                                                               targetSize:imageSize
-                                                                              contentMode:PHImageContentModeAspectFill
-                                                                                  options:options
-                                                                            resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
-                                                                                if (result) {
-                                                                                    NSError* err = nil;
-                                                                                    if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
-                                                                                                                              options:NSAtomicWrite
-                                                                                                                                error:&err])
-                                                                                        media[@"error"] = @"false";
-                                                                                    else {
-                                                                                        if (err) {
-                                                                                            media[@"thumbnail"] = @"";
-                                                                                            NSLog(@"Error saving image: %@", [err localizedDescription]);
-                                                                                        }
+        else {
+            if ([media[@"type"] isEqualToString:@"PHAssetCollectionSubtypeAlbumMyPhotoStream"]) {
+                
+                [[PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum
+                                                          subtype:PHAssetCollectionSubtypeAlbumMyPhotoStream
+                                                          options:nil] enumerateObjectsUsingBlock:^(PHAssetCollection* collection, NSUInteger idx, BOOL* stop) {
+                    if (collection != nil && collection.localizedTitle != nil && collection.localIdentifier != nil) {
+                        [[PHAsset fetchAssetsInAssetCollection:collection
+                                                       options:nil] enumerateObjectsUsingBlock:^(PHAsset* _Nonnull obj, NSUInteger idx, BOOL* _Nonnull stop) {
+                            if ([obj.localIdentifier isEqualToString:media[@"id"]]) {
+                                [[PHImageManager defaultManager] requestImageForAsset:obj
+                                                                           targetSize:imageSize
+                                                                          contentMode:PHImageContentModeAspectFill
+                                                                              options:options
+                                                                        resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
+                                                                            if (result) {
+                                                                                NSError* err = nil;
+                                                                                if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
+                                                                                                                          options:NSAtomicWrite
+                                                                                                                            error:&err])
+                                                                                    media[@"error"] = @"false";
+                                                                                else {
+                                                                                    if (err) {
+                                                                                        media[@"thumbnail"] = @"";
+                                                                                        NSLog(@"Error saving image: %@", [err localizedDescription]);
                                                                                     }
                                                                                 }
-                                                                            }];
-                                }
-                            }];
-                        }
-                    }];
-                }
+                                                                            }
+                                                                        }];
+                            }
+                        }];
+                    }
+                }];
             }
         }
-        
-    }];
+    }
+    return NO;
+    
 }
 
 - (void)initConcurrent
 {
-    if(self.concurrentThumbnailQueue.maxConcurrentOperationCount != 5){
+    if(self.concurrentThumbnailQueue.maxConcurrentOperationCount != 4){
         self.concurrentThumbnailQueue = [[NSOperationQueue alloc] init];
-        self.concurrentThumbnailQueue.maxConcurrentOperationCount = 5;
+        self.concurrentThumbnailQueue.maxConcurrentOperationCount = 4;
     }
     
     if(self.concurrentVideoQueue.maxConcurrentOperationCount != 3){
@@ -487,146 +523,12 @@
             NSString *url = nsurl.absoluteURL.absoluteString;
             media[@"videoPath"] = url;
             media[@"error"] = @"false";
-            // Get the video size
-//            NSArray *tracks = [asset tracks];
-//            float estimatedSize = 0.0 ;
-////            float ratePerSecs = ([tracks[0] estimatedDataRate] / 8) / CMTimeGetSeconds([tracks[0] timeRange].duration);
-//            for (AVAssetTrack * track in tracks) {
-//                    float rate = ([track estimatedDataRate] / 8); // convert bits per second to bytes per second
-//                    float seconds = CMTimeGetSeconds([track timeRange].duration);
-//                    estimatedSize += seconds * rate;
-//            }
-////            NSLog(@"media id %@, rate at %f !!", media[@"id"], ratePerSecs);
-//            AVAssetTrack * avtrack = tracks[0];
-//            float sizeInMB = estimatedSize / 1024 / 1024;
-//
-//            if (sizeInMB > 300.0 && false){
-//                media[@"videoPath"] = @"";
-//                NSLog(@"media id %@, Large File at %f !!", media[@"id"], sizeInMB);
-//                NSString *root = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-//                NSString *tempDir = [root stringByAppendingString:@"/com.photo.video/temp"];
-//                if (![[NSFileManager defaultManager] fileExistsAtPath:tempDir isDirectory:nil]) {
-//                    [[NSFileManager defaultManager] createDirectoryAtPath:tempDir withIntermediateDirectories:YES attributes:nil error:nil];
-//                }
-////                                    NSString *outputvideoName = assetId;
-//                NSString *outputvideoName = [media[@"id"] stringByReplacingOccurrencesOfString:@"/" withString:@"-"] ;
-//                NSString *myPathDocs =  [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"mergeSlowMoVideo-%@.mp4",outputvideoName]];
-//                NSURL *outUrl = [NSURL fileURLWithPath:myPathDocs];
-//
-//                AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetPassthrough];
-//                exporter.outputURL = outUrl;
-//                exporter.outputFileType = AVFileTypeMPEG4;
-//                exporter.shouldOptimizeForNetworkUse = YES;
-//                exporter.fileLengthLimit = 10*1024*1024;
-//                if ([fileMgr fileExistsAtPath:myPathDocs]) {
-//                    media[@"videoPath"] = outUrl.absoluteURL.absoluteString;
-//                    media[@"filePath"] = url;
-//                    media[@"error"] = @"false";
-//                } else {
-//                    NSLog(@"Converting video");
-//                    [self.concurrentQueue addOperationWithBlock:^(void){
-//                        [exporter exportAsynchronouslyWithCompletionHandler:^(void){
-//                            dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(void){
-//                                //Background Thread
-//                                if (exporter.status == AVAssetExportSessionStatusCompleted) {
-//                                    NSLog(@"Converting video done with id %@", media[@"id"]);
-//                                    NSURL *exporterURL = exporter.outputURL;
-//                                    media[@"videoPath"] = exporterURL.absoluteURL.absoluteString;
-//                                    media[@"filePath"] = url;
-//                                    media[@"error"] = @"false";
-//                                }
-//                                dispatch_async(dispatch_get_main_queue(), ^(void){
-//                                    //Run UI Updates
-//                                    if ([media[@"method"] isEqualToString:@"getUrl"]){
-//                                        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-//                                                                                      messageAsDictionary:media];
-//                                        [self.commandDelegate sendPluginResult:pluginResult callbackId:callBackId];
-//                                    }
-//                                });
-//                            });
-//                        }];
-//                    }];
-//                }
-//
-//            } else {
-//                media[@"error"] = @"false";
-////                if ([media[@"method"] isEqualToString:@"getUrl"]){
-////                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-////                                                                  messageAsDictionary:media];
-////                    [self.commandDelegate sendPluginResult:pluginResult callbackId:callBackId];
-////                }
-//            }
             CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
                                                           messageAsDictionary:media];
 
             [self.commandDelegate sendPluginResult:pluginResult callbackId:callBackId];
         }
     }];
-}
-
-// modified version of http://stackoverflow.com/a/21230645/1673842
-- (UIImage *)generateThumbnailImage: (NSURL *)url atSzie: (CGSize)imageSize withMaxRetry: (int)totalRetried atAssetId: (NSString *)assetId
-{
-//    NSURL *url = [NSURL fileURLWithPath:srcVideoPath];
-    CMTime time = CMTimeMake(1, 1);
-
-    AVAsset *asset = [AVAsset assetWithURL:url];
-    AVAssetImageGenerator *imageGenerator = [[AVAssetImageGenerator alloc] initWithAsset:asset];
-    imageGenerator.requestedTimeToleranceAfter = kCMTimeZero; // needed to get a precise time (http://stackoverflow.com/questions/5825990/i-cannot-get-a-precise-cmtime-for-generating-still-image-from-1-8-second-video)
-    imageGenerator.requestedTimeToleranceBefore = kCMTimeZero; // ^^
-    imageGenerator.appliesPreferredTrackTransform = YES; // crucial to have the right orientation for the image (http://stackoverflow.com/questions/9145968/getting-video-snapshot-for-thumbnail)
-    imageGenerator.maximumSize = imageSize;
-    NSError *error = NULL;
-    CGImageRef imageRef = [imageGenerator copyCGImageAtTime:time actualTime:NULL error:&error];
-    if(error){
-        @try{
-            NSLog(@"截取视频 %@ 缩略图时发生错误，错误信息：%@", url.absoluteString, error);
-            [NSThread sleepForTimeInterval: .5];
-            if(totalRetried > 0){
-                totalRetried = totalRetried - 1;
-                return [self generateThumbnailImage:url atSzie:imageSize withMaxRetry:totalRetried atAssetId:assetId];
-            } else if (totalRetried != -99) {
-                NSString *root = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-                NSString *tempDir = [root stringByAppendingString:@"/com.photo.video/temp"];
-                if (![[NSFileManager defaultManager] fileExistsAtPath:tempDir isDirectory:nil]) {
-                    [[NSFileManager defaultManager] createDirectoryAtPath:tempDir withIntermediateDirectories:YES attributes:nil error:nil];
-                }
-                NSString *outputvideoName = assetId;
-                outputvideoName = [outputvideoName stringByReplacingOccurrencesOfString:@"/" withString:@"-"] ;
-                NSString *myPathDocs =  [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"mergeSlowMoVideo-%@.mp4",outputvideoName]];
-                NSURL *outUrl = [NSURL fileURLWithPath:myPathDocs];
-                AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetPassthrough];
-                exporter.outputURL = outUrl;
-                exporter.outputFileType = AVFileTypeMPEG4;
-                exporter.shouldOptimizeForNetworkUse = YES;
-                NSLog(@"Converting video");
-                [self.concurrentVideoQueue addOperationWithBlock:^{
-                    [exporter exportAsynchronouslyWithCompletionHandler:^{
-                        if (exporter.status == AVAssetExportSessionStatusCompleted) {
-                            NSURL *exporterURL = exporter.outputURL;
-                            UIImage *thumbnail = [self generateThumbnailImage:exporterURL atSzie:imageSize withMaxRetry:-99 atAssetId:assetId];
-                            if (thumbnail){
-                                NSString* imageId = [assetId stringByReplacingOccurrencesOfString:@"/" withString:@"^"];
-                                NSArray * paths2 = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
-                                NSString * docsPath = [paths2 lastObject];
-                                NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, imageId];
-                                [UIImagePNGRepresentation(thumbnail) writeToFile:thumbnailPath options:NSAtomicWrite error:nil];
-                            }
-                        }
-                    }];
-                }];
-            }
-        }
-        @catch(id err){
-            
-        }
-        return NULL;
-    } else {
-        UIImage *thumbnail = [UIImage imageWithCGImage:imageRef];
-        CGImageRelease(imageRef);  // CGImageRef won't be released by ARC
-        return thumbnail;
-    }
-    
 }
 
 - (void)getHQImageData:(CDVInvokedUrlCommand*)command
@@ -776,7 +678,6 @@
 
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:mediaURL ? CDVCommandStatus_OK : CDVCommandStatus_ERROR
                                                           messageAsString:mediaURL];
-
         [self.commandDelegate sendPluginResult:pluginResult
                                     callbackId:command.callbackId];
     }];
@@ -797,10 +698,6 @@
             __weak GalleryAPI* weakSelf = self;
                 [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
                 UIView *floatingView = [[UIView alloc] initWithFrame:CGRectMake(0,topPadding,viewWidth,viewHeight)];
-        //                        self.avPlayerLayer = [AVPlayerLayer playerLayerWithPlayer:self.avPlayer];
-        //                        self.avPlayerLayer.backgroundColor = [UIColor blackColor].CGColor;
-        //                        self.avPlayerLayer.frame = extraView.bounds;
-        //                        [extraView.layer addSublayer:self.avPlayerLayer];
                 self.avPlayerCtrl = [[AVPlayerViewController alloc] init];
                 self.avPlayerCtrl.view.frame = floatingView.frame;
                 self.avPlayerCtrl.delegate = weakSelf;
@@ -890,6 +787,73 @@
     return subtypes;
 }
 
+
+
+// modified version of http://stackoverflow.com/a/21230645/1673842
+- (UIImage *)generateThumbnailImage: (NSURL *)url atSzie: (CGSize)imageSize withMaxRetry: (int)totalRetried atAssetId: (NSString *)assetId
+{
+//    NSURL *url = [NSURL fileURLWithPath:srcVideoPath];
+    CMTime time = CMTimeMake(1, 1);
+
+    AVAsset *asset = [AVAsset assetWithURL:url];
+    AVAssetImageGenerator *imageGenerator = [[AVAssetImageGenerator alloc] initWithAsset:asset];
+    imageGenerator.requestedTimeToleranceAfter = kCMTimeZero; // needed to get a precise time (http://stackoverflow.com/questions/5825990/i-cannot-get-a-precise-cmtime-for-generating-still-image-from-1-8-second-video)
+    imageGenerator.requestedTimeToleranceBefore = kCMTimeZero; // ^^
+    imageGenerator.appliesPreferredTrackTransform = YES; // crucial to have the right orientation for the image (http://stackoverflow.com/questions/9145968/getting-video-snapshot-for-thumbnail)
+    imageGenerator.maximumSize = imageSize;
+    NSError *error = NULL;
+    CGImageRef imageRef = [imageGenerator copyCGImageAtTime:time actualTime:NULL error:&error];
+    if(error){
+        @try{
+            NSLog(@"截取视频 %@ 缩略图时发生错误，错误信息：%@", url.absoluteString, error);
+            [NSThread sleepForTimeInterval: .5];
+            if(totalRetried > 0){
+                totalRetried = totalRetried - 1;
+                return [self generateThumbnailImage:url atSzie:imageSize withMaxRetry:totalRetried atAssetId:assetId];
+                
+            } else if (totalRetried != -99) {
+                NSString *root = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+                NSString *tempDir = [root stringByAppendingString:@"/com.photo.video/temp"];
+                if (![[NSFileManager defaultManager] fileExistsAtPath:tempDir isDirectory:nil]) {
+                    [[NSFileManager defaultManager] createDirectoryAtPath:tempDir withIntermediateDirectories:YES attributes:nil error:nil];
+                }
+                NSString *outputvideoName = assetId;
+                outputvideoName = [outputvideoName stringByReplacingOccurrencesOfString:@"/" withString:@"-"] ;
+                NSString *myPathDocs =  [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"mergeSlowMoVideo-%@.mp4",outputvideoName]];
+                NSURL *outUrl = [NSURL fileURLWithPath:myPathDocs];
+                AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetPassthrough];
+                exporter.outputURL = outUrl;
+                exporter.outputFileType = AVFileTypeMPEG4;
+                exporter.shouldOptimizeForNetworkUse = YES;
+                [self.concurrentVideoQueue addOperationWithBlock:^{
+                    [exporter exportAsynchronouslyWithCompletionHandler:^{
+                        if (exporter.status == AVAssetExportSessionStatusCompleted) {
+                            NSURL *exporterURL = exporter.outputURL;
+                            UIImage *thumbnail = [self generateThumbnailImage:exporterURL atSzie:imageSize withMaxRetry:-99 atAssetId:assetId];
+                            if (thumbnail){
+                                NSString* imageId = [assetId stringByReplacingOccurrencesOfString:@"/" withString:@"^"];
+                                NSArray * paths2 = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+                                NSString * docsPath = [paths2 lastObject];
+                                NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, imageId];
+                                [UIImagePNGRepresentation(thumbnail) writeToFile:thumbnailPath options:NSAtomicWrite error:nil];
+                            }
+                        }
+                    }];
+                }];
+            }
+        }
+        @catch(id err){
+            
+        }
+        return NULL;
+    } else {
+        UIImage *thumbnail = [UIImage imageWithCGImage:imageRef];
+        CGImageRelease(imageRef);  // CGImageRef won't be released by ARC
+        return thumbnail;
+    }
+    
+}
+
 - (UIImage*)fixrotation:(UIImage*)image
 {
 
@@ -966,6 +930,12 @@
     CGContextRelease(ctx);
     CGImageRelease(cgimg);
     return img;
+}
+
+static dispatch_time_t getDispatchTimeFromSeconds(float seconds) {
+    long long milliseconds = seconds * 1000.0;
+    dispatch_time_t waitTime = dispatch_time( DISPATCH_TIME_NOW, 1000000LL * milliseconds );
+    return waitTime;
 }
 
 + (NSString*)cordovaVersion
