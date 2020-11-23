@@ -13,7 +13,8 @@
 @property int videoUrlCount;
 
 // Allocated here for succinctness.
-@property NSOperationQueue *concurrentQueue;
+@property NSOperationQueue *concurrentThumbnailQueue;
+@property NSOperationQueue *concurrentVideoQueue;
 @property AVPlayer *avPlayer;
 @property AVPlayerLayer *avPlayerLayer;
 @property NSString *avPlayerStoredState;
@@ -152,6 +153,7 @@
 
 - (void)getMedia:(CDVInvokedUrlCommand*)command
 {
+    [self initConcurrent];
     [self.commandDelegate runInBackground:^{
         NSDictionary* subtypes = [GalleryAPI subtypes];
         NSDictionary* album = [command argumentAtIndex:0];
@@ -167,6 +169,7 @@
         self.videoUrlCount = 0;
         
         if (collections && collections.count > 0) {
+            NSLog(@"get media at collection %@", collections[0]);
             PHAssetCollection* collection = collections[0];
             [[PHAsset fetchAssetsInAssetCollection:collection
                                            options:nil] enumerateObjectsUsingBlock:^(PHAsset* obj, NSUInteger idx, BOOL* stop) {
@@ -196,8 +199,7 @@
                     result[@"fileTime"] =  [NSString stringWithFormat: @"%f", obj.duration];
                     [assets addObject:result];
                     
-                } else if (obj.mediaType == PHAssetMediaTypeVideo && 1 <= obj.duration && obj.duration <= 299){
-                    self.videoCount = self.videoCount + 1;
+                } else if (obj.mediaType == PHAssetMediaTypeVideo){
                     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
                     [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
                     NSString *creationDate = [formatter stringFromDate:obj.creationDate];
@@ -223,10 +225,19 @@
                     result[@"fileType"] = @"video";
                     result[@"fileTime"] =  [NSString stringWithFormat: @"%f", obj.duration];
                     [assets addObject:result];
+                    
+                    
                 }
             }];
         }
         NSArray* reversedAssests = [[assets reverseObjectEnumerator] allObjects];
+        for (NSMutableDictionary *reversedAsset in reversedAssests){
+//            [self getMediaThumbnailInternal: reversedAsset];
+            [self.concurrentThumbnailQueue addOperationWithBlock:^(void){
+                [self getMediaThumbnailInternal: reversedAsset];
+            }];
+        }
+        
 
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:reversedAssests];
 
@@ -251,18 +262,10 @@
 //        NSString* docsPath = [NSTemporaryDirectory() stringByStandardizingPath];
         NSArray * paths2 = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
         NSString * docsPath = [paths2 lastObject];
-//        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory,NSUserDomainMask,YES);
-//        NSString *docsPath = [paths objectAtIndex:0];
-//        self.indexxx = self.indexxx + 1;
-//        NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, @(self.indexxx)];
         NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, imageId];
 
         NSFileManager* fileMgr = [[NSFileManager alloc] init];
         NSString *systemVersion = [[UIDevice currentDevice] systemVersion];
-//        CGSize photoSize = CGSizeMake(widthFloat, heightFloat);
-//        if (50 > photoSize.width || 50 > photoSize.height) {
-//            return;
-//        }
         CGFloat screenWidth = [[UIScreen mainScreen]bounds].size.width;
         CGFloat scale = 2;
         if (screenWidth > 700) {
@@ -276,6 +279,7 @@
                 media[@"error"] = @"true";
                 PHFetchResult* assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[media[@"id"]] options:nil];
                 if (assets && assets.count > 0) {
+                    media[@"error"] = @"false";
                     if ([media[@"fileType"] isEqualToString:@"video"]){
                         [self processVideo:assets[0] withMedia:media withFileMgr:fileMgr withCallBackId:command.callbackId];
                     }
@@ -288,87 +292,32 @@
             PHFetchResult* assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[ media[@"id"] ] options:nil];
             
             if (assets && assets.count > 0) {
-                [[PHImageManager defaultManager] requestImageForAsset:assets[0]
-                                                           targetSize:imageSize
-                                                          contentMode:PHImageContentModeAspectFit
-                                                              options:options
-                                                        resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
-                                                            if (result) {
-                                                                NSError* err = nil;
-                                                                if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
-                                                                    options:NSAtomicWrite
-                                                                     error:&err])
-                                                                    media[@"error"] = @"false";
-                                                                else {
-                                                                    if (err) {
-                                                                        media[@"thumbnail"] = @"";
-                                                                        NSLog(@"Error saving image: %@", [err localizedDescription]);
-                                                                    }
-                                                                }
-                                                                
-                                                            }
-                                                        }];
-                
-                if ([media[@"fileType"] isEqualToString:@"video"]){
-                    [self processVideo:assets[0] withMedia:media withFileMgr:fileMgr withCallBackId:command.callbackId];
-                }
-                
-//
-//                    if ([media[@"fileType"] isEqualToString:@"video"]){
-//                    if (false){
-//                        [[PHImageManager defaultManager] requestAVAssetForVideo:assets[0] options:nil resultHandler:^(AVAsset *asset, AVAudioMix *audioMix, NSDictionary *info)
-//                        {
-//                            if ([asset isKindOfClass:[AVURLAsset class]])
-//                            {
-//                                NSURL *nsurl = [(AVURLAsset*)asset URL];
-//                                 // do what you want with it
-//                                NSString *url = nsurl.absoluteURL.absoluteString;
-//
-//                                UIImage *thumbnail= [self generateThumbnailImage:nsurl atSzie:imageSize withMaxRetry:10 atAssetId:media[@"id"]];
-//                                NSError* err = nil;
-//                                if (thumbnail && [UIImagePNGRepresentation(thumbnail) writeToFile:thumbnailPath
-//                                    options:NSAtomicWrite
-//                                     error:&err])
-//                                    media[@"error"] = @"false";
-//                                else {
-//                                    if (err) {
-//                                        media[@"thumbnail"] = @"";
-//                                        media[@"videoPath"] = url;
-//                                        NSLog(@"Error saving image: %@", [err localizedDescription]);
-//                                    }
-//                                }
-//                                media[@"videoPath"] = url;
-//                                media[@"error"] = @"false";
-//                                if ([media[@"method"] isEqualToString:@"getUrl"]){
-//                                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-//                                                                                  messageAsDictionary:media];
-//                                    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-//                                }
-//
-//                            }
-//                        }];
-//
-//                    } else {
-//                        [[PHImageManager defaultManager] requestImageForAsset:assets[0]
-//                                                                   targetSize:imageSize
-//                                                                  contentMode:PHImageContentModeAspectFit
-//                                                                      options:options
-//                                                                resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
-//                                                                    if (result) {
-//                                                                        NSError* err = nil;
-//                                                                        if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
-//                                                                            options:NSAtomicWrite
-//                                                                             error:&err])
-//                                                                            media[@"error"] = @"false";
-//                                                                        else {
-//                                                                            if (err) {
-//                                                                                media[@"thumbnail"] = @"";
-//                                                                                NSLog(@"Error saving image: %@", [err localizedDescription]);
-//                                                                            }
-//                                                                        }
+                    [[PHImageManager defaultManager] requestImageForAsset:assets[0]
+                                                               targetSize:imageSize
+                                                              contentMode:PHImageContentModeAspectFit
+                                                                  options:options
+                                                            resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
+                                                                if (result) {
+                                                                    [self.concurrentThumbnailQueue addOperationWithBlock:^(void){
+                                                                        NSError* err = nil;
+                                                                        if ([UIImageJPEGRepresentation(result, .6) writeToFile:thumbnailPath
+                                                                            options:NSAtomicWrite
+                                                                             error:&err])
+                                                                            media[@"error"] = @"false";
+                                                                        else {
+                                                                            if (err) {
+                                                                                media[@"thumbnail"] = @"";
+                                                                                NSLog(@"Error saving image: %@", [err localizedDescription]);
+                                                                            }
+                                                                        }
+                                                                    }];
+//                                                                    if([media[@"fileType"] isEqualToString:@"video"]){
+//                                                                        [self.concurrentVideoQueue addOperationWithBlock:^(void){
+//                                                                            [self processVideo:assets[0] withMedia:media withFileMgr:fileMgr withCallBackId:command.callbackId];
+//                                                                        }];
 //                                                                    }
-//                                                                }];
-//                    }
+                                                                }
+                                                            }];
                 
             }
             else {
@@ -405,61 +354,6 @@
                                             [self processVideo:obj withMedia:media withFileMgr:fileMgr withCallBackId:command.callbackId];
                                         }
                                     }
-//                                        if ([media[@"fileType"] isEqualToString:@"video"]){
-//                                            [[PHImageManager defaultManager] requestAVAssetForVideo:obj options:nil resultHandler:^(AVAsset *asset, AVAudioMix *audioMix, NSDictionary *info)
-//                                            {
-//                                                if ([asset isKindOfClass:[AVURLAsset class]])
-//                                                {
-//                                                    NSURL *nsurl = [(AVURLAsset*)asset URL];
-//                                                     // do what you want with it
-//                                                    NSString *url = nsurl.absoluteURL.absoluteString;
-//
-//                                                    UIImage *thumbnail= [self generateThumbnailImage:nsurl atSzie:imageSize withMaxRetry:10 atAssetId:media[@"id"]];
-//                                                    NSError* err = nil;
-//                                                    if (thumbnail && [UIImagePNGRepresentation(thumbnail) writeToFile:thumbnailPath
-//                                                        options:NSAtomicWrite
-//                                                         error:&err])
-//                                                        media[@"error"] = @"false";
-//                                                    else {
-//                                                        if (err) {
-//                                                            media[@"thumbnail"] = @"";
-//                                                            media[@"videoPath"] = url;
-//                                                            NSLog(@"Error saving image: %@", [err localizedDescription]);
-//                                                        }
-//                                                    }
-//                                                    media[@"videoPath"] = url;
-//                                                    media[@"error"] = @"false";
-//                                                    if ([media[@"method"] isEqualToString:@"getUrl"]){
-//                                                        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-//                                                                                                      messageAsDictionary:media];
-//                                                        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-//                                                    }
-//
-//                                                }
-//                                            }];
-//
-//                                        } else {
-//                                            [[PHImageManager defaultManager] requestImageForAsset:obj
-//                                                                                       targetSize:CGSizeMake(200, 200)
-//                                                                                      contentMode:PHImageContentModeAspectFill
-//                                                                                          options:options
-//                                                                                    resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
-//                                                                                        if (result) {
-//                                                                                            NSError* err = nil;
-//                                                                                            if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
-//                                                                                                                                      options:NSAtomicWrite
-//                                                                                                                                        error:&err])
-//                                                                                                media[@"error"] = @"false";
-//                                                                                            else {
-//                                                                                                if (err) {
-//                                                                                                    media[@"thumbnail"] = @"";
-//                                                                                                    NSLog(@"Error saving image: %@", [err localizedDescription]);
-//                                                                                                }
-//                                                                                            }
-//                                                                                        }
-//                                                                                    }];
-//                                        }
-                                    
                                 }
                             }];
                         }
@@ -477,11 +371,108 @@
     }];
 }
 
+- (void)getMediaThumbnailInternal: (NSMutableDictionary *)media
+{
+    [self initConcurrent];
+    [self.commandDelegate runInBackground:^{
+        PHImageRequestOptions* options = [PHImageRequestOptions new];
+        options.synchronous = YES;
+        options.resizeMode = PHImageRequestOptionsResizeModeFast;
+        options.networkAccessAllowed = false;
+        
+//        NSMutableDictionary* media = [command argumentAtIndex:0];
+        NSString* imageId = [media[@"id"] stringByReplacingOccurrencesOfString:@"/" withString:@"^"];
+//        NSString* docsPath = [NSTemporaryDirectory() stringByStandardizingPath];
+        NSArray * paths2 = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+        NSString * docsPath = [paths2 lastObject];
+        NSString* thumbnailPath = [NSString stringWithFormat:@"%@/%@_mthumb.png", docsPath, imageId];
+
+        NSFileManager* fileMgr = [[NSFileManager alloc] init];
+        NSString *systemVersion = [[UIDevice currentDevice] systemVersion];
+        CGFloat screenWidth = [[UIScreen mainScreen]bounds].size.width;
+        CGFloat scale = 2;
+        if (screenWidth > 700) {
+            scale = 1.5;
+        }
+        CGSize imageSize = CGSizeMake(systemVersion.floatValue < 12.0 ? 50: 300, systemVersion.floatValue < 12.0 ? 50: 300);
+
+        if ([fileMgr fileExistsAtPath:thumbnailPath]){
+            
+        } else {
+            media[@"error"] = @"true";
+            PHFetchResult* assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[ media[@"id"] ] options:nil];
+            
+            if (assets && assets.count > 0) {
+                    [[PHImageManager defaultManager] requestImageForAsset:assets[0]
+                                                               targetSize:imageSize
+                                                              contentMode:PHImageContentModeAspectFit
+                                                                  options:options
+                                                            resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
+                                                                if (result) {
+                                                                    NSError *err = nil;
+                                                                    if ([UIImageJPEGRepresentation(result, .6) writeToFile:thumbnailPath
+                                                                        options:NSAtomicWrite
+                                                                         error:&err])
+                                                                        media[@"error"] = @"false";
+                                                                    else {
+                                                                        if (err) {
+                                                                            media[@"thumbnail"] = @"";
+                                                                            NSLog(@"Error saving image: %@", [err localizedDescription]);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }];
+            }
+            else {
+                if ([media[@"type"] isEqualToString:@"PHAssetCollectionSubtypeAlbumMyPhotoStream"]) {
+                    
+                    [[PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum
+                                                              subtype:PHAssetCollectionSubtypeAlbumMyPhotoStream
+                                                              options:nil] enumerateObjectsUsingBlock:^(PHAssetCollection* collection, NSUInteger idx, BOOL* stop) {
+                        if (collection != nil && collection.localizedTitle != nil && collection.localIdentifier != nil) {
+                            [[PHAsset fetchAssetsInAssetCollection:collection
+                                                           options:nil] enumerateObjectsUsingBlock:^(PHAsset* _Nonnull obj, NSUInteger idx, BOOL* _Nonnull stop) {
+                                if ([obj.localIdentifier isEqualToString:media[@"id"]]) {
+                                    [[PHImageManager defaultManager] requestImageForAsset:obj
+                                                                               targetSize:imageSize
+                                                                              contentMode:PHImageContentModeAspectFill
+                                                                                  options:options
+                                                                            resultHandler:^(UIImage* _Nullable result, NSDictionary* _Nullable info) {
+                                                                                if (result) {
+                                                                                    NSError* err = nil;
+                                                                                    if ([UIImagePNGRepresentation(result) writeToFile:thumbnailPath
+                                                                                                                              options:NSAtomicWrite
+                                                                                                                                error:&err])
+                                                                                        media[@"error"] = @"false";
+                                                                                    else {
+                                                                                        if (err) {
+                                                                                            media[@"thumbnail"] = @"";
+                                                                                            NSLog(@"Error saving image: %@", [err localizedDescription]);
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }];
+                                }
+                            }];
+                        }
+                    }];
+                }
+            }
+        }
+        
+    }];
+}
+
 - (void)initConcurrent
 {
-    if(self.concurrentQueue.maxConcurrentOperationCount != 3){
-        self.concurrentQueue = [[NSOperationQueue alloc] init];
-        self.concurrentQueue.maxConcurrentOperationCount = 3;
+    if(self.concurrentThumbnailQueue.maxConcurrentOperationCount != 5){
+        self.concurrentThumbnailQueue = [[NSOperationQueue alloc] init];
+        self.concurrentThumbnailQueue.maxConcurrentOperationCount = 5;
+    }
+    
+    if(self.concurrentVideoQueue.maxConcurrentOperationCount != 3){
+        self.concurrentVideoQueue = [[NSOperationQueue alloc] init];
+        self.concurrentVideoQueue.maxConcurrentOperationCount = 3;
     }
 }
 
@@ -609,7 +600,7 @@
                 exporter.outputFileType = AVFileTypeMPEG4;
                 exporter.shouldOptimizeForNetworkUse = YES;
                 NSLog(@"Converting video");
-                [self.concurrentQueue addOperationWithBlock:^{
+                [self.concurrentVideoQueue addOperationWithBlock:^{
                     [exporter exportAsynchronouslyWithCompletionHandler:^{
                         if (exporter.status == AVAssetExportSessionStatusCompleted) {
                             NSURL *exporterURL = exporter.outputURL;
@@ -820,7 +811,7 @@
         }
         NSMutableDictionary* media = [command argumentAtIndex:0];
         
-        if(media[@"getPlayState"]){
+        if([media[@"getPlayState"] boolValue]){
             NSString *playState = @"paused";
             if ((self.avPlayer.rate != 0) && (self.avPlayer.error == nil)) {
                 // player is playing
@@ -834,26 +825,25 @@
             return;
         }
         
-        if(media[@"pause"]){
+        if([media[@"pause"] boolValue]){
             [self.avPlayer pause];
             CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsString:@"Video paused"];
             [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
             return;
-        } else if (media[@"play"]){
+        } else if ([media[@"play"] boolValue]){
             [self.avPlayer play];
             CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsString:@"Video play"];
             [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
             return;
         }
         
-        if(media[@"hide"]){
+        if([media[@"hide"] boolValue]){
             self.avPlayerCtrl.view.hidden = YES;
             [self.avPlayer pause];
             CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus: CDVCommandStatus_OK messageAsString:@"Video play hidden"];
             [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
             return;
         } else {
-            self.avPlayerCtrl.view.hidden = NO;
             if(media[@"id"]){
                 PHFetchResult* assets = [PHAsset fetchAssetsWithLocalIdentifiers:@[ media[@"id"] ] options:nil];
                 if (assets && assets.count > 0) {
@@ -866,12 +856,19 @@
                                 self.avPlayer = [AVPlayer playerWithURL:nsurl];
                                 self.avPlayerCtrl.player = self.avPlayer;
 //                                [self.avPlayer seekToTime:storedPlaybackTime];
-                                [self.avPlayer play];
+                                if([media[@"loadonly"] boolValue]){
+                                    self.avPlayerCtrl.view.hidden = YES;
+                                } else {
+                                    self.avPlayerCtrl.view.hidden = NO;
+                                    [self.avPlayer play];
+                                }
+                                
                             });
                         }
                     }];
                 }
             } else {
+                self.avPlayerCtrl.view.hidden = NO;
                 [self.avPlayer play];
             }
         }
